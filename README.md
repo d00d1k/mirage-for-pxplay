@@ -15,6 +15,7 @@
   <img alt="macOS 26+" src="https://img.shields.io/badge/macOS-26%2B-blue">
   <img alt="PXPlay 3.2.0" src="https://img.shields.io/badge/PXPlay-3.2.0%20%2B%20Demo-ff4f9a">
   <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-green">
+  <a href="https://www.patreon.com/17168801/join"><img alt="Fuel the next update on Patreon" src="https://img.shields.io/badge/Patreon-fuel%20the%20next%20update-ff424d?logo=patreon&logoColor=white"></a>
 </p>
 
 <p align="center">
@@ -23,6 +24,7 @@
   <a href="#install">Install</a> ·
   <a href="#steady-wifi">Steady Wi‑Fi warning</a> ·
   <a href="#under-the-hood">Under the hood</a> ·
+  <a href="#support">⚡ Support</a> ·
   <a href="README.ru.md">По‑русски</a>
 </p>
 
@@ -261,6 +263,18 @@ Tests/smoke-test.sh --live # also starts the real PXPlay once and checks the age
 ```
 
 The project and donation links shown in the installer are set in `release.config`.
+
+<a id="support"></a>
+
+## ⚡ Support
+
+Mirage is free and open source, and it's staying that way. No features behind a paywall, ever.
+
+That said, it does run on Monster Ultra White. If Mirage saved your thumbs some input lag, you can
+**[buy me a can on Patreon](https://www.patreon.com/17168801/join)**. I've got a list of ideas to make it even smoother, sharper and
+lower‑latency, and every can gets them a little closer to your screen. ⚡
+
+Starring the repo and telling a friend with a Mac and a PS5 helps just as much. ⭐
 
 ## 🙏 Credits
 

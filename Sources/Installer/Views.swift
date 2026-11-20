@@ -335,7 +335,7 @@ private struct DoneScreen: View {
             note(L("app.update.note"), icon: "info.circle")
             HStack(spacing: 10) {
                 if let donate = InstallerModel.donateURL {
-                    QuietButton(title: "☕︎ " + L("app.done.coffee")) { NSWorkspace.shared.open(donate) }
+                    QuietButton(title: "⚡ " + L("app.done.coffee")) { NSWorkspace.shared.open(donate) }
                 }
                 if let project = InstallerModel.projectURL {
                     QuietButton(title: L("app.done.project")) { NSWorkspace.shared.open(project) }
