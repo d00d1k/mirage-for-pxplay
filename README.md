@@ -15,7 +15,7 @@
   <img alt="macOS 26+" src="https://img.shields.io/badge/macOS-26%2B-blue">
   <img alt="PXPlay 3.2.0" src="https://img.shields.io/badge/PXPlay-3.2.0%20%2B%20Demo-ff4f9a">
   <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-green">
-  <a href="https://www.patreon.com/17168801/join"><img alt="Fuel the next update on Patreon" src="https://img.shields.io/badge/Patreon-fuel%20the%20next%20update-ff424d?logo=patreon&logoColor=white"></a>
+  <a href="https://www.patreon.com/17168801/join"><img alt="Say thanks on Patreon" src="https://img.shields.io/badge/Patreon-say%20thanks-ff424d?logo=patreon&logoColor=white"></a>
 </p>
 
 <p align="center">
@@ -268,13 +268,11 @@ The project and donation links shown in the installer are set in `release.config
 
 ## ⚡ Support
 
-Mirage is free and open source, and it's staying that way. No features behind a paywall, ever.
+I made Mirage because 30 fps just bugs me, and I don't have a beefy gaming PC, only a PS5 and an Apple silicon Mac.
+If that's you too, now you've got frame generation as well. It's free and it'll stay free.
 
-That said, it does run on Monster Ultra White. If Mirage saved your thumbs some input lag, you can
-**[buy me a can on Patreon](https://www.patreon.com/17168801/join)**. I've got a list of ideas to make it even smoother, sharper and
-lower‑latency, and every can gets them a little closer to your screen. ⚡
-
-Starring the repo and telling a friend with a Mac and a PS5 helps just as much. ⭐
+If you'd like to say thanks, there's a [Patreon](https://www.patreon.com/17168801/join) (a can of Monster Ultra White keeps the late nights
+going ⚡), and a ⭐ on this repo means just as much.
 
 ## 🙏 Credits
 
