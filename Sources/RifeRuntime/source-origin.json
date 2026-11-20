@@ -1,0 +1,127 @@
+{
+  "experiment_options": {
+    "defaults": {
+      "gpu_io": true,
+      "replace_mask": false
+    },
+    "scope": "immutable per-interpolator options; model metadata unchanged",
+    "student_graphs": [
+      "odf-ifnet425-acc-b3r32-b4r16-v1"
+    ]
+  },
+  "helpers": [
+    {
+      "path": "Sources/RifeMetalCore/PaddedFrameConvert.swift",
+      "sha256": "602b0a40c3bfec4209d0b9180b3c2eb90b797ae5e41331d961955965337122d6"
+    },
+    {
+      "path": "Sources/RifeMetalCore/Shaders/PaddedFrameConvert.metal",
+      "sha256": "ca5edd81ca8f1e1db68b70f75ca26f1fe5fe0d5e6558b3feb86430a8dbeb9f94"
+    },
+    {
+      "path": "Sources/RifeMetalCore/RifeExperimentOptions.swift",
+      "sha256": "8fb625afc48dd74418cd7cafae12cd65b6be0777ce175dfb48bc52d660178769"
+    },
+    {
+      "path": "Sources/RifeMetalCore/StudentGraphContract.swift",
+      "sha256": "e0585253122789de9bbbe020937c530df13e86512356e1952a1077f25cc39c8a"
+    }
+  ],
+  "licenses": [
+    {
+      "path": "LICENSE",
+      "sha256": "af36c0f04ed111f6b4b748101fa5e7f41b0dfad00826adcc6fa20dd8b790b7a2"
+    },
+    {
+      "path": "THIRD-PARTY.md",
+      "sha256": "9de3d613919c2c15734601a3c73816b6a898adf6df221361cfe80865b907311d"
+    }
+  ],
+  "model_derivation": {
+    "path": "Scripts/derive_fourstage_model.py",
+    "sha256": "e2acd4342cc68bec08a49578e7493c3799d886c938562dc70d598f56c9e9e39a"
+  },
+  "package_manifest": {
+    "path": "Package.swift",
+    "sha256": "8a2cbc6f12e8ff0030e6d7dbebb0b5ecbdb0f5eaefd09419c205d3661b4fe1e5"
+  },
+  "patched_sources": [
+    {
+      "path": "Sources/RifeMetalCore/IFNetGraph.swift",
+      "sha256": "3e2500d301a371100e35bf763eedb906e32ac12a8c874773a264677e4bcb671b"
+    },
+    {
+      "path": "Sources/RifeMetal/RifeStream.swift",
+      "sha256": "6d0c176dd706ea1484c1d537ae7965478b52b199546ec4927130348f39b7b862"
+    },
+    {
+      "path": "Sources/RifeMetal/RifeConfiguration.swift",
+      "sha256": "1ec1fdf2497c68d870c66c9829ba0e1dd9a10f378992693174ab3345e79b5d63"
+    },
+    {
+      "path": "Sources/RifeMetal/RifeInterpolator.swift",
+      "sha256": "b8d622a67d4c6b21d470c627a5145501847dd172f95c71c738812135b295af99"
+    },
+    {
+      "path": "Sources/RifeMetalCore/InferenceContext.swift",
+      "sha256": "62a4e9153876a712f374c4454cad6fc4f82c0f5497a6f6dd8e893ebaa9df3ee1"
+    },
+    {
+      "path": "Sources/RifeMetalCore/AirServiceTrace.swift",
+      "sha256": "9710f960653584f3692562e5ac50d8fa27c814940d6f5570f75c12f5ef71207a"
+    },
+    {
+      "path": "Sources/RifeMetalCore/FourStageGraphContract.swift",
+      "sha256": "2b619e172406e292d50b8b84549ac3181c4cc9936a953444d61d32f87b6bb9fa"
+    },
+    {
+      "path": "Sources/RifeMetalCore/IFBlockBuilder.swift",
+      "sha256": "9f827cff6dc42fcd35188819d23845ff5d323ad5cd22800e06c12e15a28073f9"
+    },
+    {
+      "path": "Sources/RifeMetalCore/WeightStore.swift",
+      "sha256": "a80d6a722621ea5bb5baf3bdfc8fa449527dbc3a445bd11fc819129d2866f671"
+    },
+    {
+      "path": "Sources/RifeMetalCore/WeightHeader.swift",
+      "sha256": "e8b9f156b5f6aec94e06cd3745bb08618b2858800575aee8d398146509462297"
+    }
+  ],
+  "patches": [
+    {
+      "path": "stream-io.patch",
+      "sha256": "266892943b1369b1af95ef2306bee126473a4d5ec35186628e11fb4b12a030b4"
+    },
+    {
+      "path": "experiment-options.patch",
+      "sha256": "aa6821a05979aef45aee1980809c6304fe48251624b4c740367a6245d457d483"
+    },
+    {
+      "path": "runtime-support.patch",
+      "sha256": "c5787366442ae31760d06425193ac48dae17d0eedca0e61df03e2536f69d354e"
+    }
+  ],
+  "production_model": {
+    "container_version": 2,
+    "graph_id": "odf-ifnet425-fourstage-acc-v1",
+    "mask_update": "accumulate",
+    "name": "ODF-VFI",
+    "sha256": "729ea555016da98e207bc4570e0be81dddbbd37302f7330c89696da798fba22d",
+    "source_sha256": "ef29a643a76a9202600458a23dddce16919337ef01743d0fbe817684ec990f74",
+    "stage_count": 4,
+    "tensor_count": 128,
+    "trained": false
+  },
+  "recipe_sha256": "cfa375deae65a520a61c98d79f7b36143d463056118e7b532aeae5c3d038fe67",
+  "schema": 1,
+  "upstream": {
+    "archive_sha256": "f916255f1344bca52b92c9e3e6ba23a31b7261579e87b1ac9537536a089cd3b7",
+    "commit": "ac6408022eb6bc1a53181f5b2716a9f5ded507c2",
+    "repository": "https://github.com/cinemore/rife-metal",
+    "version": "0.1.8"
+  },
+  "weights": {
+    "path": "Sources/RifeMetal/Resources/rife-v4.25.rmw",
+    "sha256": "729ea555016da98e207bc4570e0be81dddbbd37302f7330c89696da798fba22d"
+  }
+}

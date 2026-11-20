@@ -1,0 +1,37 @@
+MIRAGE FOR PXPLAY
+Smooth 60 fps frame generation for PXPlay 3.2.0 (or PXPlay Demo 3.2.0) on Apple silicon Macs, macOS 26 or later.
+Not affiliated with PXPlay or its developer. PXPlay itself is never changed.
+
+FIRST OPEN (once)
+Mirage Installer is not signed by Apple yet, so macOS asks once:
+1. Double-click "Mirage Installer". macOS says it can't verify the developer. Click "Done".
+2. Open System Settings > Privacy & Security, scroll down and click "Open Anyway" next to Mirage Installer.
+3. Confirm with "Open Anyway" and your password or Touch ID.
+The apps the installer creates open normally afterwards.
+
+INSTALL
+Mirage finds PXPlay by itself. You can also drag PXPlay onto the installer window.
+Pick a style, click Install, then open "Mirage for PXPlay" from Applications or Launchpad.
+
+UNINSTALL
+Open Mirage Installer again and click Uninstall.
+
+-----
+
+MIRAGE FOR PXPLAY
+Плавные 60 fps для PXPlay 3.2.0 (или PXPlay Demo 3.2.0) на Mac с Apple Silicon, macOS 26 или новее.
+Не связано с PXPlay и его разработчиком. Сам PXPlay не изменяется.
+
+ПЕРВЫЙ ЗАПУСК (один раз)
+Mirage Installer пока не подписан Apple, поэтому macOS один раз переспросит:
+1. Дважды щёлкни «Mirage Installer». macOS скажет, что не может проверить разработчика. Нажми «Готово».
+2. Открой Системные настройки > Конфиденциальность и безопасность, пролистай вниз и нажми «Всё равно открыть» рядом с Mirage Installer.
+3. Подтверди кнопкой «Всё равно открыть» и паролем или Touch ID.
+Программы, которые создаст установщик, дальше открываются как обычно.
+
+УСТАНОВКА
+Mirage сам найдёт PXPlay. Можно и перетащить PXPlay в окно установщика.
+Выбери стиль, нажми «Установить», затем открывай «Mirage for PXPlay» из Программ или Launchpad.
+
+УДАЛЕНИЕ
+Снова открой Mirage Installer и нажми «Удалить».

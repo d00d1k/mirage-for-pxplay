@@ -1,0 +1,10 @@
+build/
+.build/
+.swiftpm/
+.DS_Store
+*.dylib
+Data/
+metal-support.properties
+# Maintainer-only: syncs the engine from a private development tree
+Tools/sync-from-lab.py
+Sources/LAB-SYNC.txt
