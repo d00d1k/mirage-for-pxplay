@@ -40,6 +40,15 @@ final class InstallerModel: ObservableObject {
             screen = .installing
             progress = parts.count > 1 ? Double(parts[1]) ?? 0.3 : 0.3
             stepTitle = InstallStep.copy.title
+        case "demo":
+            // A looping installation for the README animation: still, then sharpening over eight seconds.
+            screen = .installing
+            stepTitle = InstallStep.prepare.title
+            let start = Date()
+            Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+                let t = Date().timeIntervalSince(start)
+                Task { @MainActor in self?.progress = min(1, max(0, (t - 3) / 8)) }
+            }
         case "done":
             screen = .done
             result.launchers = [.full: Paths.current.launcher(.full), .demo: Paths.current.launcher(.demo)]

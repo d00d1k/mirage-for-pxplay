@@ -55,8 +55,11 @@ enum PXPlayFinder {
         }
         urls += spotlight()
         var seen = Set<String>()
+        // Screenshots and tests: MIRAGE_SEARCH_ONLY=/Applications limits results to these folders.
+        let only = ProcessInfo.processInfo.environment["MIRAGE_SEARCH_ONLY"]?.split(separator: ":").map(String.init)
         return urls.compactMap { url -> URL? in
             let path = url.resolvingSymlinksInPath().standardizedFileURL.path
+            if let only, !only.contains(where: { path.hasPrefix($0 + "/") }) { return nil }
             // Skip copies in the Trash and PXPlay bundles nested inside other apps.
             if path.contains("/.Trash") || path.dropLast(4).contains("/Contents/") { return nil }
             return seen.insert(path).inserted ? URL(fileURLWithPath: path) : nil
