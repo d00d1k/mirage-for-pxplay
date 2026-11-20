@@ -121,6 +121,9 @@ The Demo works too, within its usual 30‑minute sessions. Mirage doesn't touch 
 - **Always start PXPlay through *Mirage for PXPlay*.** Opening PXPlay directly runs plain PXPlay. Nothing breaks, it just isn't smoother.
 - Settings live in **PXPlay → Settings → Video**, right under **Frame generation**. Keep Frame generation on.
 - Changes apply from the next stream.
+- **MacBook Pro with ProMotion:** set the display to **60 Hz** for 30 → 60 (System Settings → Displays → Refresh rate →
+  60 Hertz). It keeps vsync and frame pacing clean. You can switch back to ProMotion after playing.
+- **Not sure yet?** Mirage works with the free **PXPlay Demo** too. Try it there first, and if you like it, buy PXPlay.
 
 | Style | What you get | Good for |
 | --- | --- | --- |
