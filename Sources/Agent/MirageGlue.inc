@@ -156,6 +156,11 @@ static BOOL repeatsFrame(CVPixelBufferRef a, CVPixelBufferRef b) {
     float _handedShift;    // shift of the prediction last handed out for presentation
     BOOL _repeat;
     NSUInteger _heldCount;
+    // Pacing statistics, logged every ~30 s: how evenly frames arrive and how often the
+    // hold had to cover a repeated or late frame.
+    unsigned _paceBins[5];       // arrival gaps: <28, 28-39, 39-55, 55-80, >80 ms
+    unsigned _paceFrames, _paceRepeats, _paceHeldRepeat, _paceHeldLate;
+    uint64_t _paceMaxGap;
     NSString *_name;
     id _current;
     LabFramePair *_running;
@@ -304,6 +309,22 @@ static BOOL repeatsFrame(CVPixelBufferRef a, CVPixelBufferRef b) {
     id current = format ? (__bridge id)buffer : nil;
     BOOL consecutive = ready && current && now - _lastCapture <= historyLimit &&
         matchingInput(previous, buffer, format);
+    if (consecutive && _extrapolating) {
+        uint64_t gap = now - _lastCapture;
+        double ms = (double)gap / 1e6;
+        _paceBins[ms < 28 ? 0 : ms < 39 ? 1 : ms < 55 ? 2 : ms < 80 ? 3 : 4]++;
+        if (gap > _paceMaxGap) _paceMaxGap = gap;
+        _paceRepeats += repeat;
+        if (++_paceFrames >= 900) {
+            fprintf(stderr, "[Mirage] pacing over %u frames: gaps <28ms %u | 28-39 %u | 39-55 %u | 55-80 %u | >80 %u; "
+                            "max %.0f ms; repeated pictures %u; held over repeat %u, over late frame %u\n",
+                    _paceFrames, _paceBins[0], _paceBins[1], _paceBins[2], _paceBins[3], _paceBins[4],
+                    (double)_paceMaxGap / 1e6, _paceRepeats, _paceHeldRepeat, _paceHeldLate);
+            memset(_paceBins, 0, sizeof(_paceBins));
+            _paceFrames = _paceRepeats = _paceHeldRepeat = _paceHeldLate = 0;
+            _paceMaxGap = 0;
+        }
+    }
     _current = current;
     _lastCapture = now;
     _present = nil;
@@ -397,6 +418,7 @@ static const uint64_t kHoldLimit = 120 * NSEC_PER_MSEC;
     uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
     if (!_closed && _held && (!repeatOnly || _repeat) && now - _heldSince <= kHoldLimit) {
         frame = CVPixelBufferRetain((__bridge CVPixelBufferRef)_held);
+        if (repeatOnly) ++_paceHeldRepeat; else ++_paceHeldLate;
         if (++_heldCount == 1 || _heldCount % 60 == 0) {
             fprintf(stderr, "[Mirage] %s: held the prediction over %lu repeated/late frames.\n",
                     _name.UTF8String, (unsigned long)_heldCount);

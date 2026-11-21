@@ -46,7 +46,8 @@ grep -q "PXPlay 3.1.0 is not supported" <<<"$out" && ! grep -q "ready" <<<"$out"
 pass "PXPlay 3.1.0: agent stays off"
 
 echo "Frame generation (mock renderer)"
-out=$(MIRAGE_HOST_APP="$app" MIRAGE_TEST_KNOWN_RENDERER=1 "${java[@]}" --enable-native-access=ALL-UNNAMED \
+# HudNet runs one frame behind, so exact pixel parity between two runs needs it off (as in the lab).
+out=$(FGLAB_HUDNET=0 MIRAGE_HOST_APP="$app" MIRAGE_TEST_KNOWN_RENDERER=1 "${java[@]}" --enable-native-access=ALL-UNNAMED \
     -cp "$work/classes:$jar:$libs/*" com.grill.streamutils.metal.MetalRenderer "$work/Mock.dylib" 2>&1) || fail "$out"
 grep -E "^(RIFE|Matches|Dropped|Native HUD|Extrapolation|Hold)" <<<"$out" | sed 's/^/      /'
 pass "RIFE pacing, NV12 parity, overlay label, real-frame-first prediction and hold"

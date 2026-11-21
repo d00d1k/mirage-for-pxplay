@@ -58,6 +58,10 @@ private final class Backend {
     var extrapolationDamping = 0
     private let protectHud: Bool
     private let pool: CVPixelBufferPool
+    /// Neural Engine HUD mask; nil (rules only) when the model is missing or FGLAB_HUDNET=0.
+    private let hudNet: HudNet?
+    /// Apple's people segmentation for character edges; nil when FGLAB_PERSON=0.
+    private let personMask: PersonMask?
     private var lastPair: UInt64?
     private var hudPrimed = false
     private let profile = ProcessInfo.processInfo.environment["FGLAB_PROFILE"] == "1"
@@ -78,6 +82,21 @@ private final class Backend {
         generatedBGRA = try makeBuffer(width, height)
         extrapolatedBGRA = try makeBuffer(width, height)
         self.protectHud = protectHud && engine == 2
+        if self.protectHud, ProcessInfo.processInfo.environment["FGLAB_HUDNET"] != "0",
+           let device = MTLCreateSystemDefaultDevice() {
+            hudNet = HudNet(resources: resources, device: device)
+        } else {
+            hudNet = nil
+        }
+        if hudNet != nil { fputs("[Mirage] HudNet ready (Neural Engine HUD mask).\n", stderr) }
+        // Experimental, off by default (FGLAB_PERSON=1): on GTA VI clips the Vision mask is too
+        // coarse and a frame late at a fast orbit, so it chewed heads more than it helped, and it
+        // costs ~24 ms of Neural Engine time per frame.
+        if ProcessInfo.processInfo.environment["FGLAB_PERSON"] == "1", let device = MTLCreateSystemDefaultDevice() {
+            personMask = PersonMask(device: device)
+        } else {
+            personMask = nil
+        }
         let attrs = [
             kCVPixelBufferWidthKey as String: width,
             kCVPixelBufferHeightKey as String: height,
@@ -105,6 +124,11 @@ private final class Backend {
         guard CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(nil, pool, limit, &output) == kCVReturnSuccess,
               let output else { throw BackendError.allocation }
         let t1 = DispatchTime.now().uptimeNanoseconds
+        // The HUD network runs on the Neural Engine one frame behind: started once this frame
+        // is finished (below), so it uses the idle time until the next frame instead of
+        // competing with RIFE, and nothing ever waits for it.
+        let netReady = hudNet?.waitIdle() ?? false
+        let personReady = personMask?.waitIdle() ?? false
 
         let bypass = ProcessInfo.processInfo.environment["FGLAB_BYPASS"] == "1"
         if !bypass {
@@ -119,25 +143,37 @@ private final class Backend {
         lastPair = pair
         var shown = bypass ? b : generatedBGRA
         var maskUpdated = false
+        // Missing or failed network: the rules alone, exactly as before.
+        let netMask = netReady ? hudNet?.mask : nil
         if extrapolationStep > 0, !bypass, let flows = interpolator.flows {
             if !consecutive { io.resetMotionHistory() }
             maskUpdated = try io.extrapolate(previous: a, current: b, flows: flows, step: extrapolationStep,
                                              damping: extrapolationDamping,
-                                             hudReset: protectHud ? !hudPrimed : nil, into: extrapolatedBGRA)
+                                             hudReset: protectHud ? !hudPrimed : nil, net: netMask,
+                                             person: personReady && consecutive ? personMask?.mask : nil,
+                                             into: extrapolatedBGRA)
             if profile { fputs(String(format: "[Mirage] extrapolation gain %.2f\n", io.lastGain), stderr) }
             shown = extrapolatedBGRA
         }
         try io.compose(generated: shown, previous: a, current: b, currentNV12: current,
-                       output: output, protectHud: protectHud, reset: !hudPrimed, updateMask: !maskUpdated)
+                       output: output, protectHud: protectHud, reset: !hudPrimed, updateMask: !maskUpdated,
+                       net: netMask)
         hudPrimed = hudPrimed || protectHud
         CVBufferPropagateAttachments(current, output)
+        if let hudNet, !hudNet.busy, (try? io.prepareNet(current: b, input: hudNet.input)) != nil {
+            hudNet.start()
+        }
+        if let personMask, !personMask.busy, (try? io.preparePerson(current: b, input: personMask.input)) != nil {
+            personMask.start()
+        }
         debugInterpolated = bypass ? nil : generatedBGRA
         debugShown = shown
         if profile {
             let t3 = DispatchTime.now().uptimeNanoseconds
-            fputs(String(format: "[Mirage] stages in %.2f model %.2f out %.2f total %.2f ms\n",
+            fputs(String(format: "[Mirage] stages in %.2f model %.2f out %.2f total %.2f ms, hudnet %.2f ms\n",
                          Double(t1 - t0) / 1e6, Double(t2 - t1) / 1e6, Double(t3 - t2) / 1e6,
-                         Double(t3 - t0) / 1e6), stderr)
+                         Double(t3 - t0) / 1e6, hudNet?.lastMilliseconds ?? 0), stderr)
+            fputs(String(format: "[Mirage] person mask %.2f ms\n", personMask?.lastMilliseconds ?? 0), stderr)
         }
         return output
     }

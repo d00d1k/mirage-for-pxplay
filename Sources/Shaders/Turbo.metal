@@ -95,6 +95,8 @@ kernel void hudUpdate(texture2d<float, access::read> previous [[texture(0)]],
                       device uchar *still [[buffer(0)]],
                       constant HudParams &h [[buffer(1)]],
                       constant uint &reticle [[buffer(2)]],
+                      device const half *net [[buffer(3)]],      // HudNet probabilities, 960x544
+                      constant uint &useNet [[buffer(4)]],
                       uint2 gid [[thread_position_in_grid]]) {
     if (gid.x >= h.width || gid.y >= h.height) return;
     float3 c = current.read(gid).rgb;
@@ -130,7 +132,28 @@ kernel void hudUpdate(texture2d<float, access::read> previous [[texture(0)]],
             if (before) count = kStableFrames;
         }
     }
+    // The network adds what it recognises as HUD (crosshairs, counters, prompts, map),
+    // on top of the rules above; it never removes their findings.
+    if (useNet && count < kStableFrames) {
+        uint2 n = min(uint2(gid.x * 960 / h.width, gid.y * 540 / h.height), uint2(959, 539));
+        if (float(net[n.y * 960 + n.x]) > 0.5f) count = kStableFrames;
+    }
     still[index] = uchar(count);
+}
+
+// HudNet input: the frame scaled to 960x540, 4 black rows below (the network's 960x544),
+// as planar float16 RGB 0..1, which the Neural Engine takes without any CPU conversion.
+kernel void netInput(texture2d<float, access::sample> frame [[texture(0)]],
+                     device half *out [[buffer(0)]],
+                     uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= 960 || gid.y >= 544) return;
+    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
+    float3 rgb = float3(0.0f);
+    if (gid.y < 540) rgb = frame.sample(s, (float2(gid) + 0.5f) / float2(960.0f, 540.0f)).rgb;
+    uint plane = 960 * 544, i = gid.y * 960 + gid.x;
+    out[i] = half(rgb.r);
+    out[plane + i] = half(rgb.g);
+    out[2 * plane + i] = half(rgb.b);
 }
 
 static float hudWeight(device const uchar *still, int2 p, constant HudParams &h) {
@@ -209,6 +232,23 @@ static bool hudNear(device const uchar *still, float2 q, constant HudParams &h) 
     return false;
 }
 
+// People mask (previous frame, Vision) moved onto the current frame along RIFE's motion.
+static float personAt(texture2d<float, access::sample> person, texture2d<half, access::sample> flow0,
+                      texture2d<half, access::sample> flow1, float2 p, float2 size) {
+    constexpr sampler ms(coord::normalized, address::clamp_to_edge, filter::linear);
+    float2 v = midMotion(flow0, flow1, p);
+    return person.sample(ms, (p - v) / size).r;
+}
+
+// Vision input: the frame scaled to 512x288.
+kernel void personInput(texture2d<float, access::sample> frame [[texture(0)]],
+                        texture2d<float, access::write> out [[texture(1)]],
+                        uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= out.get_width() || gid.y >= out.get_height()) return;
+    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
+    out.write(float4(frame.sample(s, (float2(gid) + 0.5f) / float2(out.get_width(), out.get_height())).rgb, 1.0f), gid);
+}
+
 kernel void extrapolateFrame(texture2d<float, access::sample> current [[texture(0)]],
                              texture2d<half, access::sample> flow0 [[texture(1)]],
                              texture2d<half, access::sample> flow1 [[texture(2)]],
@@ -219,10 +259,13 @@ kernel void extrapolateFrame(texture2d<float, access::sample> current [[texture(
                              constant uint &avoidHud [[buffer(3)]],
                              device const float *trust [[buffer(4)]],   // per motion block, 0..1
                              constant uint4 &grid [[buffer(5)]],        // frameW, frameH, blocksX, blocksY (0 = all trusted)
+                             texture2d<float, access::sample> person [[texture(4)]],
+                             constant uint &usePerson [[buffer(6)]],
                              uint2 gid [[thread_position_in_grid]]) {
     if (gid.x >= output.get_width() || gid.y >= output.get_height()) return;
     constexpr sampler s(coord::pixel, address::clamp_to_edge, filter::linear);
     float2 y = float2(gid) + 0.5f;
+    float stepTrust = e.step;
     // Content now at y was at y - w in frame N, where w = step * velocity of that content.
     // The motion field lives at midpoint coordinates: content at p in frame N sat at
     // p - v/2 at the midpoint. Two fixed-point iterations resolve both offsets.
@@ -241,7 +284,50 @@ kernel void extrapolateFrame(texture2d<float, access::sample> current [[texture(
         int2 a00 = clamp(b0, int2(0), hiB), a11 = clamp(b0 + 1, int2(0), hiB);
         float t00 = trust[a00.y * grid.z + a00.x], t10 = trust[a00.y * grid.z + a11.x];
         float t01 = trust[a11.y * grid.z + a00.x], t11 = trust[a11.y * grid.z + a11.x];
-        w *= mix(mix(t00, t10, f.x), mix(t01, t11, f.x), f.y);
+        float tr = mix(mix(t00, t10, f.x), mix(t01, t11, f.x), f.y);
+        w *= tr;
+        stepTrust *= tr;
+    }
+    // At the edge of a person: RIFE's quarter-resolution flow blends the person's motion
+    // with the backdrop's there (a halo around a head while the camera circles the player).
+    // With the people mask the two are kept apart: the person is in front, inside it the
+    // person's own motion applies, outside the backdrop's, and backdrop that comes out from
+    // behind the person is stretched from beside it instead of smearing the person over it.
+    if (usePerson && stepTrust > 0.0f) {
+        float2 size = float2(output.get_width(), output.get_height());
+        const float2 dirs[8] = {float2(1, 0), float2(-1, 0), float2(0, 1), float2(0, -1),
+                                float2(0.7071f, 0.7071f), float2(-0.7071f, 0.7071f),
+                                float2(0.7071f, -0.7071f), float2(-0.7071f, -0.7071f)};
+        const float radii[4] = {8.0f, 16.0f, 28.0f, 44.0f};
+        bool haveP = false, haveB = false;
+        float2 vp = float2(0.0f), vb = float2(0.0f);
+        for (int r = 0; r < 4 && !(haveP && haveB); ++r) {
+            for (int d = 0; d < 8; ++d) {
+                float2 p = y + dirs[d] * radii[r];
+                float pm = personAt(person, flow0, flow1, p, size);
+                if (!haveP && pm > 0.85f) { vp = midMotion(flow0, flow1, p); haveP = true; }
+                if (!haveB && pm < 0.15f) { vb = midMotion(flow0, flow1, p); haveB = true; }
+            }
+        }
+        if (haveP && haveB && length(vp - vb) > 3.0f) {
+            // From here on the mask is moved by the person's own motion (taken from inside
+            // the person), not by RIFE's motion at the edge, which is the blurred one.
+            constexpr sampler ms(coord::normalized, address::clamp_to_edge, filter::linear);
+            float2 wp = stepTrust * vp, wb = stepTrust * vb;
+            #define PERSON(q) person.sample(ms, ((q) - vp) / size).r
+            if (PERSON(y - wp) > 0.35f) {
+                w = wp;                                   // the person reaches here: in front
+            } else if (PERSON(y - wb) < 0.35f) {
+                w = wb;                                   // backdrop that was in view
+            } else {
+                w = float2(0.0f);                         // backdrop from behind the person:
+                for (int k = 3; k >= 1; --k) {            // stretch the nearest visible backdrop
+                    float2 wk = wb * (float(k) / 4.0f);
+                    if (PERSON(y - wk) < 0.35f) { w = wk; break; }
+                }
+            }
+            #undef PERSON
+        }
     }
     float len = length(w);
     if (len > e.maxShift) w *= e.maxShift / len;

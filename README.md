@@ -43,7 +43,7 @@ that your thumbs don't notice.
 - 🎞 **30 → 60 fps** with RIFE 4.25, a neural network that specialises in in‑between frames, running on Metal.
 - ⚡ **Prediction, not interpolation.** The real frame goes on screen the moment it arrives, and Mirage
   predicts the next one. No waiting for the future means [no extra input lag](#no-input-lag).
-- 🧭 **A HUD that stays put.** Quest text, subtitles and the minimap don't wobble or smear.
+- 🧭 **A HUD that stays put.** A small neural network on the Neural Engine tells the HUD apart from the game world, so the crosshair, minimap and menus don't wobble or smear.
 - 🎛 **Three styles, zero homework.** *Recommended*, *Best picture*, *Original PXPlay*. Knobs for tinkerers live
   under *More options*.
 - 📶 **Steady Wi‑Fi (optional).** Fewer lag spikes on Wi‑Fi, at a price. [Read the warning](#steady-wifi).
@@ -103,7 +103,7 @@ The Demo works too, within its usual 30‑minute sessions. Mirage doesn't touch 
 
 ## 🚀 Install in a minute
 
-1. Download **Mirage-for-PXPlay-1.0.0.zip** from [Releases](https://github.com/d00d1k/mirage-for-pxplay/releases/latest) and unzip it.
+1. Download the latest **Mirage-for-PXPlay** zip from [Releases](https://github.com/d00d1k/mirage-for-pxplay/releases/latest) and unzip it.
 2. Double‑click **Mirage Installer**.
 
    > [!NOTE]
@@ -191,6 +191,17 @@ flowchart LR
 4. **RIFE draws the frame on the GPU.** If it's ever late, PXPlay's own frame fills in, so you never get a stutter
    because of Mirage.
 
+## 🧠 New in 1.1: a neural network for the HUD
+
+Mirage now runs a small neural network (about 240,000 parameters) on the Apple **Neural Engine** to tell the HUD
+apart from the game world. It was trained on real GTA 6 gameplay recordings, and it marks the crosshair, ammo and
+health counters, the minimap, prompts and menus. Those stay crisp and still while the rest of the frame is
+generated, and characters, caps and drivers are no longer mistaken for HUD.
+
+It works alongside the existing "hasn't moved for three frames" rules and only ever adds to them. It runs one frame
+behind and is never waited on, so it costs no GPU time and no latency. If the Neural Engine is busy or the model
+can't load, Mirage quietly falls back to the rules alone. It was tuned on GTA 6; in other games it simply helps less.
+
 <a id="under-the-hood"></a>
 
 ## 🧪 Under the hood
@@ -212,6 +223,8 @@ Explained with a straight face. Mostly.
   on purpose and grows up to 60 fps as the files are copied. No game footage was harmed.
 - **A root helper with trust issues.** A tiny shell script under launchd. It reads exactly one number from one file,
   checks that it belongs to a running PXPlay, and touches nothing else.
+- **A tiny brain for the HUD.** A ~240k‑parameter U‑Net on the Neural Engine, trained on real gameplay, spots the
+  crosshair and minimap so the GPU never has to stare at them.
 - **Twelve languages,** because PXPlay speaks twelve and we didn't want to be the odd one out.
 
 ## 🔄 PXPlay updates

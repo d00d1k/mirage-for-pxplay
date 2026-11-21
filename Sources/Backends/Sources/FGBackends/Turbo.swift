@@ -30,6 +30,8 @@ final class TurboIO {
     private let extrapolate: MTLComputePipelineState
     private let motion: MTLComputePipelineState
     private let refine: MTLComputePipelineState
+    private let netInput: MTLComputePipelineState
+    private let personInputPipeline: MTLComputePipelineState
     private let layered: MTLComputePipelineState
     /// Sharp per-layer motion at half resolution (see refineMotion in Turbo.metal).
     private let refined: MTLTexture
@@ -84,6 +86,8 @@ final class TurboIO {
               let r = library.makeFunction(name: "refineMotion"),
               let l = library.makeFunction(name: "extrapolateLayered"),
               let k = library.makeFunction(name: "cleanMotion"),
+              let n = library.makeFunction(name: "netInput"),
+              let pi = library.makeFunction(name: "personInput"),
               let blocks = device.makeBuffer(length: TurboIO.blocksX * TurboIO.blocksY * 16, options: .storageModeShared),
               let blockTrust = device.makeBuffer(length: TurboIO.blocksX * TurboIO.blocksY * 4, options: .storageModeShared),
               let still = device.makeBuffer(length: width * height, options: .storageModePrivate) else {
@@ -105,6 +109,8 @@ final class TurboIO {
         self.refined = refined
         self.refinedClean = refinedClean
         clean = try device.makeComputePipelineState(function: k)
+        netInput = try device.makeComputePipelineState(function: n)
+        personInputPipeline = try device.makeComputePipelineState(function: pi)
         self.blocks = blocks
         self.blockTrust = blockTrust
         self.queue = queue
@@ -149,6 +155,39 @@ final class TurboIO {
         command.commit()
         withExtendedLifetime(owners) { command.waitUntilCompleted() }
         guard command.status == .completed else { throw Failure.render }
+    }
+
+    /// Writes the HudNet input (frame scaled to 960x540 + 4 black rows) from a BGRA frame.
+    func prepareNet(current: CVPixelBuffer, input: MTLBuffer) throws {
+        guard let command = queue.makeCommandBuffer(), let encoder = command.makeComputeCommandEncoder() else {
+            throw Failure.metal
+        }
+        let c = try texture(current, plane: 0, format: .bgra8Unorm)
+        encoder.setTexture(c.0, index: 0)
+        encoder.setBuffer(input, offset: 0, index: 0)
+        dispatch(encoder, netInput, HudNet.width, HudNet.height)
+        encoder.endEncoding()
+        try finish(command, keeping: [c.1])
+    }
+
+    /// Writes the Vision input (frame scaled to 512x288) from a BGRA frame.
+    func preparePerson(current: CVPixelBuffer, input: CVPixelBuffer) throws {
+        guard let command = queue.makeCommandBuffer(), let encoder = command.makeComputeCommandEncoder() else {
+            throw Failure.metal
+        }
+        let c = try texture(current, plane: 0, format: .bgra8Unorm)
+        let o = try texture(input, plane: 0, format: .bgra8Unorm)
+        encoder.setTexture(c.0, index: 0)
+        encoder.setTexture(o.0, index: 1)
+        dispatch(encoder, personInputPipeline, o.0.width, o.0.height)
+        encoder.endEncoding()
+        try finish(command, keeping: [c.1, o.1])
+    }
+
+    private func bindNet(_ encoder: MTLComputeCommandEncoder, _ net: MTLBuffer?) {
+        var use: UInt32 = net == nil ? 0 : 1
+        encoder.setBuffer(net ?? still, offset: 0, index: 3)
+        encoder.setBytes(&use, length: MemoryLayout<UInt32>.stride, index: 4)
     }
 
     /// NV12 frames from the decoder into the BGRA buffers RIFE consumes.
@@ -274,7 +313,8 @@ final class TurboIO {
     /// Returns true when the mask was updated here.
     @discardableResult
     func extrapolate(previous: CVPixelBuffer, current: CVPixelBuffer, flows: (MTLTexture, MTLTexture),
-                     step: Float, damping: Int, hudReset: Bool?, into output: CVPixelBuffer) throws -> Bool {
+                     step: Float, damping: Int, hudReset: Bool?, net: MTLBuffer? = nil,
+                     person: MTLTexture? = nil, into output: CVPixelBuffer) throws -> Bool {
         var gain = dampingGain(now: try cameraMotion(flows, previous: previous, current: current), mode: damping)
         let trust: Float = cutGuard && isCut(residual: lastResidual, raw: lastRaw) ? 0 : 1
         lastTrust = trust
@@ -301,6 +341,7 @@ final class TurboIO {
             encoder.setBuffer(still, offset: 0, index: 0)
             encoder.setBytes(&hud, length: MemoryLayout<HudParams>.stride, index: 1)
             encoder.setBytes(&reticle, length: MemoryLayout<UInt32>.stride, index: 2)
+            bindNet(encoder, net)
             dispatch(encoder, update, width, height)
             encoder.memoryBarrier(scope: .buffers)
         }
@@ -344,6 +385,9 @@ final class TurboIO {
                                  anyUntrusted ? UInt32(Self.blocksX) : 0, UInt32(Self.blocksY))
         encoder.setBuffer(blockTrust, offset: 0, index: 4)
         encoder.setBytes(&grid, length: MemoryLayout<SIMD4<UInt32>>.stride, index: 5)
+        var usePerson: UInt32 = person == nil ? 0 : 1
+        encoder.setTexture(person ?? c.0, index: 4)
+        encoder.setBytes(&usePerson, length: MemoryLayout<UInt32>.stride, index: 6)
         dispatch(encoder, edgeAware && step > 0 ? layered : extrapolate, o.0.width, o.0.height)
         encoder.endEncoding()
         try finish(command, keeping: owners)
@@ -353,7 +397,7 @@ final class TurboIO {
     /// Generated BGRA -> NV12 output, with stable HUD pixels taken from the real frame.
     func compose(generated: CVPixelBuffer, previous: CVPixelBuffer, current: CVPixelBuffer,
                  currentNV12: CVPixelBuffer, output: CVPixelBuffer, protectHud: Bool, reset: Bool,
-                 updateMask: Bool = true) throws {
+                 updateMask: Bool = true, net: MTLBuffer? = nil) throws {
         guard let command = queue.makeCommandBuffer(), let encoder = command.makeComputeCommandEncoder() else {
             throw Failure.metal
         }
@@ -376,6 +420,7 @@ final class TurboIO {
             encoder.setBuffer(still, offset: 0, index: 0)
             encoder.setBytes(&hud, length: MemoryLayout<HudParams>.stride, index: 1)
             encoder.setBytes(&reticle, length: MemoryLayout<UInt32>.stride, index: 2)
+            bindNet(encoder, net)
             dispatch(encoder, update, width, height)
             encoder.memoryBarrier(scope: .buffers)
         }

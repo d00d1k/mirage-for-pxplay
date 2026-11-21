@@ -60,6 +60,8 @@ echo "== Frame generation resources"
 cp Sources/RifeRuntime/Sources/RifeMetal/Resources/rife-v4.25.rmw "$payload/Resources/FG/"
 cp Sources/RifeRuntime/Sources/RifeMetalCore/Shaders/*.metal "$payload/Resources/FG/RifeShaders/"
 cp Sources/Shaders/Turbo.metal "$payload/Resources/FG/"
+# HudNet: Neural Engine HUD mask; the backend falls back to the stillness rules if it is missing.
+cp -R Sources/Models/HudNet.mlmodelc "$payload/Resources/FG/"
 cp i18n/strings.json "$payload/Resources/"
 cp Sources/Helper/*.sh "$payload/Helper/"
 chmod 0755 "$payload/Helper/"*.sh
