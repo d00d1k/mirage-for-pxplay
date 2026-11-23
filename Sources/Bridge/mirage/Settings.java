@@ -29,6 +29,7 @@ final class Settings {
     int wait = 0;
     boolean hud = true;
     boolean early = true;
+    boolean edges = true;
     boolean steadyWifi = false;
 
     static Path home() {
@@ -47,6 +48,7 @@ final class Settings {
         switch (preset) {
             case RECOMMENDED -> {
                 predict = true; strength = 70; smoothing = 2; stick = -1; wait = 0; hud = true; early = true;
+                edges = true;
             }
             case PICTURE -> {
                 predict = false; wait = 12; hud = true; early = true;
@@ -76,6 +78,7 @@ final class Settings {
         settings.wait = pick(values, "wait", WAITS, 0);
         settings.hud = !"false".equals(values.getProperty("hud"));
         settings.early = !"false".equals(values.getProperty("early"));
+        settings.edges = !"false".equals(values.getProperty("edges"));
         settings.steadyWifi = "true".equals(values.getProperty("steadyWifi"));
         if (settings.style == Style.RECOMMENDED || settings.style == Style.PICTURE) settings.apply(settings.style);
         return settings;
@@ -91,6 +94,7 @@ final class Settings {
         values.setProperty("wait", Integer.toString(wait));
         values.setProperty("hud", Boolean.toString(hud));
         values.setProperty("early", Boolean.toString(early));
+        values.setProperty("edges", Boolean.toString(edges));
         values.setProperty("steadyWifi", Boolean.toString(steadyWifi));
         try {
             Files.createDirectories(home());

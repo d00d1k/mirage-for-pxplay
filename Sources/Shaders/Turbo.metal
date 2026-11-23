@@ -214,6 +214,28 @@ struct ExtrapParams {
     float maxShift;  // pixels; larger predictions are treated as unreliable
 };
 
+// Character edges at fast camera moves ("halo" modes, chosen in the FG settings; 0 = off).
+// Where the predicted shift changes sharply within a few dozen pixels (a still character
+// against a backdrop the camera sweeps past), RIFE's quarter-resolution flow blends the two
+// motions: the prediction bends the character's outline and drags it over the backdrop.
+// What comes out from behind the character is unknown to any prediction, so these modes
+// make that band less visible instead of guessing it:
+//   bit 0  soft: blur the band along the backdrop's motion, like the game's own motion blur
+//   bit 1  calm: fade the band towards the real frame (less flicker between real and predicted)
+//   bit 2  hero: the slower side (the character the camera follows) keeps its place exactly
+//   bit 3  still: like calm, but the band shows the real frame fully (no prediction there:
+//          the edge looks as it does without frame generation)
+//   bit 4  split: calm/still only on the character's side of the edge, soft only on the
+//          backdrop's side (the character stays exactly as in the real frame, the backdrop
+//          next to it moves on, blurred)
+// Ordinary motion never reaches `lo`, so with any mode the rest of the picture is unchanged.
+struct HaloParams {
+    uint mode;
+    float lo, hi;     // predicted shift difference (px) where the handling starts / is full
+    float blur;       // blur length as a fraction of that difference
+    float2 camera;    // median motion of the frame (px per source frame)
+};
+
 static float2 midMotion(texture2d<half, access::sample> flow0, texture2d<half, access::sample> flow1, float2 p) {
     constexpr sampler s(coord::pixel, address::clamp_to_edge, filter::linear);
     return float2(flow1.sample(s, p).rg) - float2(flow0.sample(s, p).rg);
@@ -232,21 +254,66 @@ static bool hudNear(device const uchar *still, float2 q, constant HudParams &h) 
     return false;
 }
 
-// People mask (previous frame, Vision) moved onto the current frame along RIFE's motion.
-static float personAt(texture2d<float, access::sample> person, texture2d<half, access::sample> flow0,
-                      texture2d<half, access::sample> flow1, float2 p, float2 size) {
-    constexpr sampler ms(coord::normalized, address::clamp_to_edge, filter::linear);
-    float2 v = midMotion(flow0, flow1, p);
-    return person.sample(ms, (p - v) / size).r;
+// One pixel of the HUD mask (cheap check for the halo blur taps).
+static bool hudAt(device const uchar *still, float2 q, constant HudParams &h) {
+    int2 p = clamp(int2(floor(q)), int2(0), int2(h.width - 1, h.height - 1));
+    return uint(still[p.y * int(h.width) + p.x]) >= kStableFrames;
 }
 
-// Vision input: the frame scaled to 512x288.
+// People mask (an earlier frame, Vision; `age` frames ago) moved onto the current frame along
+// RIFE's motion.
+static float personAt(texture2d<float, access::sample> person, texture2d<half, access::sample> flow0,
+                      texture2d<half, access::sample> flow1, float2 p, float2 size, float age) {
+    constexpr sampler ms(coord::normalized, address::clamp_to_edge, filter::linear);
+    float2 v = midMotion(flow0, flow1, p);
+    return person.sample(ms, (p - age * v) / size).r;
+}
+
+// Vision input: the frame scaled to the input size.
 kernel void personInput(texture2d<float, access::sample> frame [[texture(0)]],
                         texture2d<float, access::write> out [[texture(1)]],
                         uint2 gid [[thread_position_in_grid]]) {
     if (gid.x >= out.get_width() || gid.y >= out.get_height()) return;
     constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
     out.write(float4(frame.sample(s, (float2(gid) + 0.5f) / float2(out.get_width(), out.get_height())).rgb, 1.0f), gid);
+}
+
+// Field for the halo modes at an eighth of the resolution (one texel per 8x8 pixels; RIFE's
+// flow is smooth at that scale): the slowest and the fastest motion within ±32 px (xy, zw) and
+// how strongly the predicted shift changes there (edge strength). Once per frame instead of
+// per pixel.
+kernel void haloField(texture2d<half, access::sample> flow0 [[texture(0)]],
+                      texture2d<half, access::sample> flow1 [[texture(1)]],
+                      texture2d<float, access::write> field [[texture(2)]],
+                      texture2d<float, access::write> strength [[texture(3)]],
+                      constant HaloParams &halo [[buffer(0)]],
+                      constant float &step [[buffer(1)]],
+                      uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= field.get_width() || gid.y >= field.get_height()) return;
+    const float2 dirs[8] = {float2(1, 0), float2(-1, 0), float2(0, 1), float2(0, -1),
+                            float2(0.7071f, 0.7071f), float2(-0.7071f, 0.7071f),
+                            float2(0.7071f, -0.7071f), float2(-0.7071f, -0.7071f)};
+    const float radii[3] = {8.0f, 18.0f, 32.0f};
+    const float weight[3] = {1.0f, 0.85f, 0.55f};   // fades out away from the edge
+    float2 y = float2(gid) * 8.0f + 4.0f;
+    float2 here = midMotion(flow0, flow1, y);
+    float2 vs = here, vf = here;
+    float ls = length(here), lf = ls, s = 0.0f;
+    for (int r = 0; r < 3; ++r) {
+        float2 rs = here, rf = here;
+        float rls = length(here), rlf = rls;
+        for (int d = 0; d < 8; ++d) {
+            float2 v = midMotion(flow0, flow1, y + dirs[d] * radii[r]);
+            float l = length(v);
+            if (l < rls) { rls = l; rs = v; }
+            if (l > rlf) { rlf = l; rf = v; }
+        }
+        s = max(s, weight[r] * smoothstep(halo.lo, halo.hi, step * length(rf - rs)));
+        if (rls < ls) { ls = rls; vs = rs; }
+        if (rlf > lf) { lf = rlf; vf = rf; }
+    }
+    field.write(float4(vs, vf), gid);
+    strength.write(float4(s), gid);
 }
 
 kernel void extrapolateFrame(texture2d<float, access::sample> current [[texture(0)]],
@@ -261,6 +328,9 @@ kernel void extrapolateFrame(texture2d<float, access::sample> current [[texture(
                              constant uint4 &grid [[buffer(5)]],        // frameW, frameH, blocksX, blocksY (0 = all trusted)
                              texture2d<float, access::sample> person [[texture(4)]],
                              constant uint &usePerson [[buffer(6)]],
+                             constant HaloParams &halo [[buffer(7)]],
+                             texture2d<float, access::sample> haloMotion [[texture(5)]],   // haloField
+                             texture2d<float, access::sample> haloEdge [[texture(6)]],
                              uint2 gid [[thread_position_in_grid]]) {
     if (gid.x >= output.get_width() || gid.y >= output.get_height()) return;
     constexpr sampler s(coord::pixel, address::clamp_to_edge, filter::linear);
@@ -295,18 +365,22 @@ kernel void extrapolateFrame(texture2d<float, access::sample> current [[texture(
     // behind the person is stretched from beside it instead of smearing the person over it.
     if (usePerson && stepTrust > 0.0f) {
         float2 size = float2(output.get_width(), output.get_height());
+        float age = float((usePerson & 255u) - 1u);
+        bool frontOnly = (usePerson & 256u) != 0u;   // keep the person, leave the backdrop to RIFE
+        bool soft = (usePerson & 512u) != 0u;        // front only, blended by mask confidence
         const float2 dirs[8] = {float2(1, 0), float2(-1, 0), float2(0, 1), float2(0, -1),
                                 float2(0.7071f, 0.7071f), float2(-0.7071f, 0.7071f),
                                 float2(0.7071f, -0.7071f), float2(-0.7071f, -0.7071f)};
         const float radii[4] = {8.0f, 16.0f, 28.0f, 44.0f};
         bool haveP = false, haveB = false;
         float2 vp = float2(0.0f), vb = float2(0.0f);
-        for (int r = 0; r < 4 && !(haveP && haveB); ++r) {
+        for (int r = 0; r < 4 && (soft || !(haveP && haveB)); ++r) {
             for (int d = 0; d < 8; ++d) {
                 float2 p = y + dirs[d] * radii[r];
-                float pm = personAt(person, flow0, flow1, p, size);
-                if (!haveP && pm > 0.85f) { vp = midMotion(flow0, flow1, p); haveP = true; }
-                if (!haveB && pm < 0.15f) { vb = midMotion(flow0, flow1, p); haveB = true; }
+                float pm = personAt(person, flow0, flow1, p, size, age);
+                // Soft: the deepest samples, away from the edge where RIFE's flow is blended.
+                if ((soft || !haveP) && pm > 0.85f) { vp = midMotion(flow0, flow1, p); haveP = true; }
+                if ((soft || !haveB) && pm < 0.15f) { vb = midMotion(flow0, flow1, p); haveB = true; }
             }
         }
         if (haveP && haveB && length(vp - vb) > 3.0f) {
@@ -314,9 +388,13 @@ kernel void extrapolateFrame(texture2d<float, access::sample> current [[texture(
             // the person), not by RIFE's motion at the edge, which is the blurred one.
             constexpr sampler ms(coord::normalized, address::clamp_to_edge, filter::linear);
             float2 wp = stepTrust * vp, wb = stepTrust * vb;
-            #define PERSON(q) person.sample(ms, ((q) - vp) / size).r
-            if (PERSON(y - wp) > 0.35f) {
+            #define PERSON(q) person.sample(ms, ((q) - age * vp) / size).r
+            if (soft) {
+                w = mix(w, wp, smoothstep(0.6f, 0.95f, PERSON(y - wp)));
+            } else if (PERSON(y - wp) > 0.35f) {
                 w = wp;                                   // the person reaches here: in front
+            } else if (frontOnly) {
+                // backdrop: RIFE's own motion, unchanged
             } else if (PERSON(y - wb) < 0.35f) {
                 w = wb;                                   // backdrop that was in view
             } else {
@@ -327,6 +405,36 @@ kernel void extrapolateFrame(texture2d<float, access::sample> current [[texture(
                 }
             }
             #undef PERSON
+        }
+    }
+    // Character edges at fast camera moves (see HaloParams).
+    float haloS = 0.0f, haloLen = 0.0f, haloT = 0.0f;
+    float2 haloDir = float2(0.0f);
+    if (halo.mode != 0u && stepTrust > 0.0f) {
+        constexpr sampler fs(coord::normalized, address::clamp_to_edge, filter::linear);
+        float2 uv = y / float2(output.get_width(), output.get_height());
+        // The field is computed for the frame's step; untrusted blocks scale it down with it.
+        haloS = haloEdge.sample(fs, uv).r * min(stepTrust / max(e.step, 1e-4f), 1.0f);
+        if (haloS < 0.004f) haloS = 0.0f;
+        if (haloS > 0.0f) {
+            float4 f = haloMotion.sample(fs, uv);
+            float2 vs = f.xy, vf = f.zw;
+            float ls = length(vs), lf = length(vf);
+            float2 here = midMotion(flow0, flow1, y);
+            float2 rel = vf - vs;
+            haloLen = stepTrust * length(rel);
+            haloDir = rel / max(length(rel), 1e-3f);
+            // Where this pixel's own motion sits between the slow and the fast side (0..1).
+            haloT = clamp(dot(here - vs, rel) / max(dot(rel, rel), 1e-3f), 0.0f, 1.0f);
+            if ((halo.mode & 4u) != 0u) {
+                // The slower side is the character the camera follows: it holds (nearly) still
+                // on screen while the camera sweeps the backdrop past it. Only in that case: a
+                // car crossing a still street must not be held back.
+                float cam = max(length(halo.camera), 1.0f);
+                float follows = 1.0f - smoothstep(0.3f, 0.5f, length(vf - halo.camera) / cam);
+                float held = 1.0f - smoothstep(0.25f, 0.45f, ls / max(lf, 1.0f));
+                w = mix(w, stepTrust * vs, haloS * follows * held);
+            }
         }
     }
     float len = length(w);
@@ -348,7 +456,36 @@ kernel void extrapolateFrame(texture2d<float, access::sample> current [[texture(
         }
         q = found;
     }
-    output.write(float4(current.sample(s, q).rgb, 1.0f), gid);
+    float3 color = current.sample(s, q).rgb;
+    if (haloS > 0.0f) {
+        if ((halo.mode & 1u) != 0u) {
+            // Blur along the backdrop's motion, strongest on the backdrop's side of the edge
+            // (the character's own pixels stay sharp). HUD pixels are left out of the blur.
+            bool split = (halo.mode & 16u) != 0u;
+            float k = haloS * (split ? smoothstep(0.3f, 0.8f, haloT) : smoothstep(0.1f, 0.6f, haloT));
+            float blurLen = halo.blur * haloLen * k;
+            if (blurLen > 1.0f) {
+                float3 sum = color;
+                float total = 1.0f;
+                for (int i = -4; i <= 4; ++i) {
+                    if (i == 0) continue;
+                    float t = float(i) / 4.0f;
+                    float2 tap = q + haloDir * (0.5f * blurLen * t);
+                    if (avoidHud && hudAt(still, tap, h)) continue;
+                    float wt = 1.0f - 0.5f * abs(t);
+                    sum += wt * current.sample(s, tap).rgb;
+                    total += wt;
+                }
+                color = sum / total;
+            }
+        }
+        if ((halo.mode & 10u) != 0u) {
+            float calm = (halo.mode & 8u) != 0u ? 1.0f : 0.6f;
+            if ((halo.mode & 16u) != 0u) calm *= 1.0f - smoothstep(0.35f, 0.8f, haloT);
+            color = mix(color, current.sample(s, y).rgb, calm * haloS);
+        }
+    }
+    output.write(float4(color, 1.0f), gid);
 }
 
 // ---------------------------------------------------------------------------

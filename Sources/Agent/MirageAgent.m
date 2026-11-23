@@ -264,6 +264,13 @@ static void JNICALL setRifeExtrapolation(JNIEnv *env, jclass klass, jboolean ena
     atomic_store(&extrapolateRife, enabled);
 }
 
+// "Tidy character edges": at fast camera moves keep the real frame on the character side of the
+// edge and blur the backdrop side (Turbo.metal halo bits 1 soft + 8 still + 16 split).
+static void JNICALL setRifeEdgeSoftening(JNIEnv *env, jclass klass, jboolean enabled) {
+    (void)env; (void)klass;
+    atomic_store(&haloMode, enabled ? 25 : 0);
+}
+
 static void JNICALL setRifeHudProtection(JNIEnv *env, jclass klass, jboolean enabled) {
     (void)env; (void)klass;
     atomic_store(&protectRifeHud, enabled);
@@ -355,6 +362,7 @@ static void JNICALL startBridge(jvmtiEnv *jvmti, JNIEnv *env, jthread thread) {
             { "setRifeHudProtection", "(Z)V", (void *)&setRifeHudProtection },
             { "setRifeExtrapolation", "(Z)V", (void *)&setRifeExtrapolation },
             { "setExtrapolationTuning", "(III)V", (void *)&setExtrapolationTuning },
+            { "setRifeEdgeSoftening", "(Z)V", (void *)&setRifeEdgeSoftening },
             { "stickInputNative", "(IIII)V", (void *)&stickInputNative },
         };
         if ((*env)->RegisterNatives(env, helper, methods, sizeof(methods) / sizeof(methods[0])) == JNI_OK) {

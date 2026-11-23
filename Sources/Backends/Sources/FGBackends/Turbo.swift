@@ -28,6 +28,10 @@ final class TurboIO {
     private let update: MTLComputePipelineState
     private let compose: MTLComputePipelineState
     private let extrapolate: MTLComputePipelineState
+    private let haloFieldPipeline: MTLComputePipelineState
+    /// Halo modes: slowest/fastest motion near each 8x8 block and edge strength (haloField).
+    private let haloMotion: MTLTexture
+    private let haloEdge: MTLTexture
     private let motion: MTLComputePipelineState
     private let refine: MTLComputePipelineState
     private let netInput: MTLComputePipelineState
@@ -44,6 +48,20 @@ final class TurboIO {
     /// front/back layer guess). Kept for further work.
     private let edgeAware = ProcessInfo.processInfo.environment["FGLAB_EDGE"] == "1"
     private let edgeDebug = UInt32(ProcessInfo.processInfo.environment["FGLAB_EDGE_DEBUG"] ?? "") ?? 0
+    /// Character edges at fast camera moves (HaloParams in Turbo.metal): bits 1 soft, 2 calm,
+    /// 4 hero, 8 still, 16 split; 0 = off. Set from the FG settings; FGLAB_HALO_MODE overrides
+    /// (offline). Measured on the 21:43 orbit clip against the real in-between game frame
+    /// (edge band 8 px inside / 16 px outside a character): soft −0.5% / −1.3%, calm −7% / +1%,
+    /// still + soft (25) −10% / +1.5%, still −10% / +4%; on six minutes of ordinary play soft
+    /// changed 1 frame for the worse, the others 200-440 of 5388 slightly (half-rate replay,
+    /// twice the live motion).
+    var haloMode: UInt32 = 0 {
+        didSet { if let forced = haloForced { haloMode = forced } }
+    }
+    private let haloForced = UInt32(ProcessInfo.processInfo.environment["FGLAB_HALO_MODE"] ?? "")
+    private let haloLo = Float(ProcessInfo.processInfo.environment["FGLAB_HALO_LO"] ?? "") ?? 10
+    private let haloHi = Float(ProcessInfo.processInfo.environment["FGLAB_HALO_HI"] ?? "") ?? 24
+    private let haloBlur = Float(ProcessInfo.processInfo.environment["FGLAB_HALO_BLUR"] ?? "") ?? 1.2
     private let blocks: MTLBuffer
     /// Per-block prediction trust for a still camera (see localTrust).
     private let blockTrust: MTLBuffer
@@ -82,6 +100,7 @@ final class TurboIO {
               let b = library.makeFunction(name: "hudUpdate"),
               let c = library.makeFunction(name: "composeNV12"),
               let x = library.makeFunction(name: "extrapolateFrame"),
+              let hf = library.makeFunction(name: "haloField"),
               let m = library.makeFunction(name: "motionBlocks"),
               let r = library.makeFunction(name: "refineMotion"),
               let l = library.makeFunction(name: "extrapolateLayered"),
@@ -97,6 +116,19 @@ final class TurboIO {
         update = try device.makeComputePipelineState(function: b)
         compose = try device.makeComputePipelineState(function: c)
         extrapolate = try device.makeComputePipelineState(function: x)
+        haloFieldPipeline = try device.makeComputePipelineState(function: hf)
+        let fieldMotion = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: (width + 7) / 8,
+                                                                   height: (height + 7) / 8, mipmapped: false)
+        fieldMotion.usage = [.shaderRead, .shaderWrite]
+        fieldMotion.storageMode = .private
+        let fieldEdge = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r16Float, width: (width + 7) / 8,
+                                                                 height: (height + 7) / 8, mipmapped: false)
+        fieldEdge.usage = [.shaderRead, .shaderWrite]
+        fieldEdge.storageMode = .private
+        guard let haloMotion = device.makeTexture(descriptor: fieldMotion),
+              let haloEdge = device.makeTexture(descriptor: fieldEdge) else { throw Failure.metal }
+        self.haloMotion = haloMotion
+        self.haloEdge = haloEdge
         motion = try device.makeComputePipelineState(function: m)
         refine = try device.makeComputePipelineState(function: r)
         layered = try device.makeComputePipelineState(function: l)
@@ -170,7 +202,10 @@ final class TurboIO {
         try finish(command, keeping: [c.1])
     }
 
-    /// Writes the Vision input (frame scaled to 512x288) from a BGRA frame.
+    /// Writes the Vision input (frame scaled to its size) from a BGRA frame.
+    private let personFrontOnly = ProcessInfo.processInfo.environment["FGLAB_PERSON_FRONT"] == "1"
+    private let personSoft = ProcessInfo.processInfo.environment["FGLAB_PERSON_FRONT"] == "2"
+
     func preparePerson(current: CVPixelBuffer, input: CVPixelBuffer) throws {
         guard let command = queue.makeCommandBuffer(), let encoder = command.makeComputeCommandEncoder() else {
             throw Failure.metal
@@ -314,7 +349,7 @@ final class TurboIO {
     @discardableResult
     func extrapolate(previous: CVPixelBuffer, current: CVPixelBuffer, flows: (MTLTexture, MTLTexture),
                      step: Float, damping: Int, hudReset: Bool?, net: MTLBuffer? = nil,
-                     person: MTLTexture? = nil, into output: CVPixelBuffer) throws -> Bool {
+                     person: MTLTexture? = nil, personAge: Int = 1, into output: CVPixelBuffer) throws -> Bool {
         var gain = dampingGain(now: try cameraMotion(flows, previous: previous, current: current), mode: damping)
         let trust: Float = cutGuard && isCut(residual: lastResidual, raw: lastRaw) ? 0 : 1
         lastTrust = trust
@@ -332,6 +367,21 @@ final class TurboIO {
         var hud = HudParams(width: UInt32(width), height: UInt32(height), threshold: 0.035,
                             reset: hudReset == true ? 1 : 0)
         let updated = hudReset != nil && motionHud
+        // Halo modes: the edge field first; it only reads the flows, so the HUD update runs
+        // after it without a barrier in between, and one barrier covers both.
+        struct HaloParams { var mode: UInt32; var lo: Float; var hi: Float; var blur: Float; var camera: SIMD2<Float> }
+        var halo = HaloParams(mode: step > 0 && !edgeAware ? haloForced ?? haloMode : 0, lo: haloLo,
+                              hi: max(haloHi, haloLo + 1), blur: haloBlur, camera: lastMotion)
+        if halo.mode != 0 {
+            var fieldStep = step
+            encoder.setTexture(flows.0, index: 0)
+            encoder.setTexture(flows.1, index: 1)
+            encoder.setTexture(haloMotion, index: 2)
+            encoder.setTexture(haloEdge, index: 3)
+            encoder.setBytes(&halo, length: MemoryLayout<HaloParams>.stride, index: 0)
+            encoder.setBytes(&fieldStep, length: MemoryLayout<Float>.stride, index: 1)
+            dispatch(encoder, haloFieldPipeline, haloMotion.width, haloMotion.height)
+        }
         if updated {
             var reticle: UInt32 = 1
             encoder.setTexture(a.0, index: 0)
@@ -343,7 +393,13 @@ final class TurboIO {
             encoder.setBytes(&reticle, length: MemoryLayout<UInt32>.stride, index: 2)
             bindNet(encoder, net)
             dispatch(encoder, update, width, height)
+        }
+        if updated && halo.mode != 0 {
+            encoder.memoryBarrier(scope: [.buffers, .textures])
+        } else if updated {
             encoder.memoryBarrier(scope: .buffers)
+        } else if halo.mode != 0 {
+            encoder.memoryBarrier(scope: .textures)
         }
         var avoidHud: UInt32 = updated ? 1 : 0
         if edgeAware && step > 0 {
@@ -385,9 +441,15 @@ final class TurboIO {
                                  anyUntrusted ? UInt32(Self.blocksX) : 0, UInt32(Self.blocksY))
         encoder.setBuffer(blockTrust, offset: 0, index: 4)
         encoder.setBytes(&grid, length: MemoryLayout<SIMD4<UInt32>>.stride, index: 5)
-        var usePerson: UInt32 = person == nil ? 0 : 1
+        // 0 = off, else 1 + the mask's age in frames (the kernel moves it that many frames on).
+        var usePerson: UInt32 = person == nil ? 0 : 1 + UInt32(min(254, max(0, personAge)))
+        if person != nil, personFrontOnly { usePerson |= 256 }
+        if person != nil, personSoft { usePerson |= 512 }
         encoder.setTexture(person ?? c.0, index: 4)
         encoder.setBytes(&usePerson, length: MemoryLayout<UInt32>.stride, index: 6)
+        encoder.setBytes(&halo, length: MemoryLayout<HaloParams>.stride, index: 7)
+        encoder.setTexture(haloMotion, index: 5)
+        encoder.setTexture(haloEdge, index: 6)
         dispatch(encoder, edgeAware && step > 0 ? layered : extrapolate, o.0.width, o.0.height)
         encoder.endEncoding()
         try finish(command, keeping: owners)

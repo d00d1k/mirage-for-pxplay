@@ -79,13 +79,17 @@ public final class FXSettingsCheck {
                 || !waitBox.getValue().startsWith("0")) {
             throw new AssertionError("Recommended preset not applied: " + mode.getValue() + " " + strength.getValue());
         }
+        CheckBox edges = (CheckBox) panel.lookup("#mirageEdges");
+        if (edges == null || !edges.isSelected() || edges.isDisabled()) {
+            throw new AssertionError("character edges must be on with Recommended");
+        }
         strength.getSelectionModel().select(0);   // 50%: a single change makes it Custom
         if (style.getSelectionModel().getSelectedIndex() != 3) throw new AssertionError("style did not turn Custom");
         String saved = Files.readString(Path.of(System.getenv("MIRAGE_HOME"), "settings.properties"));
-        if (!saved.contains("style=custom") || !saved.contains("strength=50")) {
+        if (!saved.contains("style=custom") || !saved.contains("strength=50") || !saved.contains("edges=true")) {
             throw new AssertionError("settings not saved: " + saved);
         }
         System.out.println("Settings: Mirage block under Frame generation, installer style shown, More options folded, "
-            + "Recommended preset applied, single change → Custom (saved), Steady Wi-Fi off: " + wifiStatus.getText());
+            + "Recommended preset applied (character edges on), single change → Custom (saved), Steady Wi-Fi off: " + wifiStatus.getText());
     }
 }

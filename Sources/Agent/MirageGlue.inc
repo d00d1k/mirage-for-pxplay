@@ -12,6 +12,7 @@ extern CVPixelBufferRef FGLabBackendRender(void *backend, CVPixelBufferRef previ
 extern void FGLabBackendDestroy(void *backend);
 extern void FGLabBackendSetExtrapolation(void *backend, float step);
 extern void FGLabBackendSetExtrapolationTuning(void *backend, float step, int32_t damping);
+extern void FGLabBackendSetHaloMode(void *backend, uint32_t mode);
 extern void FGLabBackendDebugInfo(void *backend, float *out, void **interpolated, void **shown);
 
 static NSString *fgResourcesPath;
@@ -23,6 +24,7 @@ static _Atomic(bool) extrapolateRife = true;
 static _Atomic(int) extrapStrength = 70;      // percent of a half-frame prediction
 static _Atomic(int) extrapDamping = 2;         // 0 off, 1 soft, 2 strong
 static _Atomic(int) extrapStickDelayMs = -1;   // <0 off; delay before a stick release reaches the video
+static _Atomic(int) haloMode = 0;              // character edges at fast camera moves (Turbo.metal HaloParams)
 static const uint64_t stickHoldNs = 180 * NSEC_PER_MSEC;
 static _Atomic(uint64_t) stickEventNs;          // last release/reversal of the camera stick
 static _Atomic(uint64_t) stickSuppressed;
@@ -241,6 +243,7 @@ static BOOL repeatsFrame(CVPixelBufferRef a, CVPixelBufferRef b) {
                 if (self->_extrapolating) {
                     step = 0.5f * (float)atomic_load(&extrapStrength) / 100.0f * stickGain();
                     FGLabBackendSetExtrapolationTuning(self->_backend, step, atomic_load(&extrapDamping));
+                    FGLabBackendSetHaloMode(self->_backend, (uint32_t)atomic_load(&haloMode));
                 }
                 generated = FGLabBackendRender(self->_backend, (__bridge CVPixelBufferRef)pair.previous,
                     next, self->_backendSequence);

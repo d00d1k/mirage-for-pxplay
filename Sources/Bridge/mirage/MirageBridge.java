@@ -38,6 +38,7 @@ public final class MirageBridge {
     public static native void prefetchVideoFrame(Object renderer, long pixelBuffer);
     private static native void setRifePrefetch(boolean enabled);
     private static native void setRifeHudProtection(boolean enabled);
+    private static native void setRifeEdgeSoftening(boolean enabled);
     private static native void setRifeExtrapolation(boolean enabled);
     private static native void setExtrapolationTuning(int strength, int damping, int stickDelayMs);
     private static native void stickInputNative(int rightX, int rightY, int leftX, int leftY);
@@ -83,6 +84,7 @@ public final class MirageBridge {
         setRifeExtrapolation(s.predict);
         setExtrapolationTuning(s.strength, s.smoothing, s.stick);
         setRifeHudProtection(s.hud);
+        setRifeEdgeSoftening(s.edges);
         setRifePrefetch(s.early);
         System.err.println("[Mirage] Style " + s.style.name().toLowerCase() + ", " + (s.predict ? "prediction" : "blend")
             + ", wait " + s.wait + " ms.");
@@ -143,6 +145,7 @@ public final class MirageBridge {
         private final ComboBox<String> waitBox = combo("mirageWait");
         private final CheckBox hud = new CheckBox(Strings.get("hud"));
         private final CheckBox early = new CheckBox(Strings.get("early"));
+        private final CheckBox edges = new CheckBox(Strings.get("edges"));
         private final CheckBox wifi = new CheckBox(Strings.get("wifi"));
         private final Label wifiStatus = note("");
         private final Label status = note("");
@@ -161,6 +164,7 @@ public final class MirageBridge {
             advanced.setId("mirageAdvanced");
             hud.setId("mirageHud");
             early.setId("mirageEarly");
+            edges.setId("mirageEdges");
             wifi.setId("mirageWifi");
             wifiStatus.setId("mirageWifiStatus");
             status.setId("mirageStatus");
@@ -170,7 +174,7 @@ public final class MirageBridge {
                 note(Strings.get("smoothing")), smoothing,
                 note(Strings.get("stick")), stick,
                 note(Strings.get("wait")), waitBox,
-                hud, early);
+                hud, edges, early);
             showAdvanced(settings.style == Settings.Style.CUSTOM);
             getChildren().addAll(title, style, styleNote, more, advanced, wifi, note(Strings.get("wifi.note")),
                 wifiStatus, status, note(Strings.get("apply")));
@@ -190,6 +194,7 @@ public final class MirageBridge {
             onPick(waitBox, index -> settings.wait = Settings.WAITS[index]);
             hud.selectedProperty().addListener((o, before, after) -> custom(() -> settings.hud = after));
             early.selectedProperty().addListener((o, before, after) -> custom(() -> settings.early = after));
+            edges.selectedProperty().addListener((o, before, after) -> custom(() -> settings.edges = after));
             wifi.selectedProperty().addListener((o, before, after) -> {
                 if (updating) return;
                 settings.steadyWifi = after;
@@ -250,6 +255,8 @@ public final class MirageBridge {
             for (Node node : List.of(strength, smoothing, stick)) node.setDisable(!s.predict);
             hud.setSelected(s.hud);
             early.setSelected(s.early);
+            edges.setSelected(s.edges);
+            edges.setDisable(!s.predict);
             wifi.setSelected(s.steadyWifi);
             updating = false;
         }

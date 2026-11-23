@@ -56,12 +56,18 @@ private final class Backend {
     /// 0 = interpolation (midpoint between N-1 and N). >0 = predict this many source frames after N.
     var extrapolationStep: Float = 0
     var extrapolationDamping = 0
+    /// Character edges at fast camera moves (see TurboIO.haloMode).
+    var haloMode: UInt32 {
+        get { io.haloMode }
+        set { if io.haloMode != newValue { io.haloMode = newValue } }
+    }
     private let protectHud: Bool
     private let pool: CVPixelBufferPool
     /// Neural Engine HUD mask; nil (rules only) when the model is missing or FGLAB_HUDNET=0.
     private let hudNet: HudNet?
     /// Apple's people segmentation for character edges; nil when FGLAB_PERSON=0.
     private let personMask: PersonMask?
+    private var personFrame: UInt64 = 0
     private var lastPair: UInt64?
     private var hudPrimed = false
     private let profile = ProcessInfo.processInfo.environment["FGLAB_PROFILE"] == "1"
@@ -128,7 +134,8 @@ private final class Backend {
         // is finished (below), so it uses the idle time until the next frame instead of
         // competing with RIFE, and nothing ever waits for it.
         let netReady = hudNet?.waitIdle() ?? false
-        let personReady = personMask?.waitIdle() ?? false
+        personFrame += 1
+        var personReady = personMask?.waitIdle() ?? false
 
         let bypass = ProcessInfo.processInfo.environment["FGLAB_BYPASS"] == "1"
         if !bypass {
@@ -147,10 +154,20 @@ private final class Backend {
         let netMask = netReady ? hudNet?.mask : nil
         if extrapolationStep > 0, !bypass, let flows = interpolator.flows {
             if !consecutive { io.resetMotionHistory() }
+            // Offline oracle: the mask of this very frame (no delay at all).
+            if let personMask, personMask.lagZero, consecutive,
+               (try? io.preparePerson(current: b, input: personMask.input)) != nil {
+                personMask.start(frame: personFrame)
+                personMask.finish()
+                personReady = personMask.waitIdle()
+            }
+            // Mask age in stream frames; too old (or across a jump) is not used.
+            let personAge = personMask.map { Int(personFrame &- $0.maskFrame) } ?? 0
+            let usePerson = personReady && consecutive && personAge <= 4
             maskUpdated = try io.extrapolate(previous: a, current: b, flows: flows, step: extrapolationStep,
                                              damping: extrapolationDamping,
                                              hudReset: protectHud ? !hudPrimed : nil, net: netMask,
-                                             person: personReady && consecutive ? personMask?.mask : nil,
+                                             person: usePerson ? personMask?.mask : nil, personAge: personAge,
                                              into: extrapolatedBGRA)
             if profile { fputs(String(format: "[Mirage] extrapolation gain %.2f\n", io.lastGain), stderr) }
             shown = extrapolatedBGRA
@@ -163,8 +180,9 @@ private final class Backend {
         if let hudNet, !hudNet.busy, (try? io.prepareNet(current: b, input: hudNet.input)) != nil {
             hudNet.start()
         }
-        if let personMask, !personMask.busy, (try? io.preparePerson(current: b, input: personMask.input)) != nil {
-            personMask.start()
+        if let personMask, !personMask.lagZero, !personMask.busy, personFrame % UInt64(personMask.every) == 0,
+           (try? io.preparePerson(current: b, input: personMask.input)) != nil {
+            personMask.start(frame: personFrame)
         }
         debugInterpolated = bypass ? nil : generatedBGRA
         debugShown = shown
@@ -218,6 +236,11 @@ public func setExtrapolationTuning(_ handle: UnsafeMutableRawPointer, _ step: Fl
     let backend = Unmanaged<Backend>.fromOpaque(handle).takeUnretainedValue()
     backend.extrapolationStep = step
     backend.extrapolationDamping = Int(damping)
+}
+
+@_cdecl("FGLabBackendSetHaloMode")
+public func setHaloMode(_ handle: UnsafeMutableRawPointer, _ mode: UInt32) {
+    Unmanaged<Backend>.fromOpaque(handle).takeUnretainedValue().haloMode = mode
 }
 
 @_cdecl("FGLabBackendDestroy")
